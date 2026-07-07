@@ -29,7 +29,23 @@ internal sealed class LruCache<TKey, TValue> : ILruCache<TKey, TValue>
         _recency = new LinkedList<LruCacheEntry<TKey, TValue>>();
     }
 
-    public bool TryGet(TKey key, out TValue? value) => throw new NotImplementedException();
+    public bool TryGet(TKey key, out TValue? value)
+    {
+        if (!_entries.TryGetValue(key, out var node))
+        {
+            value = default;
+            return false;
+        }
+
+        // Promote: remove from current position and move to head (MRU).
+        // Both operations are O(1) because we hold the node reference.
+        _recency.Remove(node);
+        _recency.AddFirst(node);
+
+        value = node.Value.Value;
+        return true;
+    }
+
     public void Set(TKey key, TValue value) => throw new NotImplementedException();
     public bool Remove(TKey key) => throw new NotImplementedException();
     public void Clear() => throw new NotImplementedException();
