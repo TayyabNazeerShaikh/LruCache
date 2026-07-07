@@ -46,7 +46,30 @@ internal sealed class LruCache<TKey, TValue> : ILruCache<TKey, TValue>
         return true;
     }
 
-    public void Set(TKey key, TValue value) => throw new NotImplementedException();
+    public void Set(TKey key, TValue value)
+    {
+        if (_entries.TryGetValue(key, out var existingNode))
+        {
+            // Update in-place and promote to MRU — no eviction needed.
+            existingNode.Value.Value = value;
+            _recency.Remove(existingNode);
+            _recency.AddFirst(existingNode);
+            return;
+        }
+
+        // At capacity: evict the tail node (LRU item) before inserting.
+        if (_entries.Count >= _capacity)
+        {
+            var lruNode = _recency.Last!;          // tail = LRU
+            _entries.Remove(lruNode.Value.Key);    // Key stored in entry — see Step 3
+            _recency.RemoveLast();
+        }
+
+        // New entry always goes to the head (most recently used).
+        var entry = new LruCacheEntry<TKey, TValue>(key, value);
+        var newNode = _recency.AddFirst(entry);
+        _entries[key] = newNode;
+    }
     public bool Remove(TKey key) => throw new NotImplementedException();
     public void Clear() => throw new NotImplementedException();
 }
