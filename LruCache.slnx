@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LruCache.Api/LruCache.Api.csproj" />
+    <Project Path="src/LruCache.Application/LruCache.Application.csproj" />
+    <Project Path="src/LruCache.Domain/LruCache.Domain.csproj" />
+    <Project Path="src/LruCache.Infrastructure/LruCache.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LruCache.IntegrationTests/LruCache.IntegrationTests.csproj" />
+    <Project Path="tests/LruCache.UnitTests/LruCache.UnitTests.csproj" />
+  </Folder>
+</Solution>
