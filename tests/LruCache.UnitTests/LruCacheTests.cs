@@ -196,4 +196,59 @@ public sealed class LruCacheTests
         var cache = new LruCache<string, int>(7);
         Assert.Equal(7, cache.Capacity);
     }
+
+    // ─── Thread safety ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ConcurrentSets_NeverExceedCapacity()
+    {
+        // 8 threads each insert 200 entries into a capacity-50 cache.
+        // Without thread safety, _entries.Count could exceed 50 (race on the
+        // capacity check) or the data structures could get corrupted.
+        const int capacity = 50;
+        const int threads = 8;
+        const int insertsPerThread = 200;
+
+        var cache = new LruCache<int, int>(capacity);
+        var tasks = Enumerable.Range(0, threads).Select(t => Task.Run(() =>
+        {
+            for (int i = 0; i < insertsPerThread; i++)
+                cache.Set(t * insertsPerThread + i, i);
+        }));
+
+        await Task.WhenAll(tasks);
+
+        Assert.True(cache.Count <= capacity, $"Count {cache.Count} exceeded capacity {capacity}");
+    }
+
+    [Fact]
+    public async Task ConcurrentMixedOperations_DoNotThrow()
+    {
+        // Concurrent Set + TryGet + Remove + Clear on the same cache must not
+        // throw or deadlock. A lock-free implementation would corrupt state here.
+        var cache = new LruCache<int, int>(10);
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        var tasks = Enumerable.Range(0, 6).Select(t => Task.Run(() =>
+        {
+            try
+            {
+                for (int i = 0; i < 500; i++)
+                {
+                    switch (i % 4)
+                    {
+                        case 0: cache.Set(i % 20, i); break;
+                        case 1: cache.TryGet(i % 20, out _); break;
+                        case 2: cache.Remove(i % 20); break;
+                        case 3: if (i % 100 == 0) cache.Clear(); break;
+                    }
+                }
+            }
+            catch (Exception ex) { exceptions.Add(ex); }
+        }));
+
+        await Task.WhenAll(tasks);
+
+        Assert.Empty(exceptions);
+    }
 }
