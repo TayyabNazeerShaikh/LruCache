@@ -1,9 +1,19 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- Expose internal types to the unit test project -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="LruCache.UnitTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Implement ILruCache from Application; use IOptions<T> from Extensions -->
+    <ProjectReference Include="..\LruCache.Application\LruCache.Application.csproj" />
+  </ItemGroup>
 
 </Project>
