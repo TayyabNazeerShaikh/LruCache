@@ -70,6 +70,20 @@ internal sealed class LruCache<TKey, TValue> : ILruCache<TKey, TValue>
         var newNode = _recency.AddFirst(entry);
         _entries[key] = newNode;
     }
-    public bool Remove(TKey key) => throw new NotImplementedException();
-    public void Clear() => throw new NotImplementedException();
+    public bool Remove(TKey key)
+    {
+        if (!_entries.TryGetValue(key, out var node))
+            return false;
+
+        // Always update both structures together — they must stay in sync.
+        _entries.Remove(key);
+        _recency.Remove(node);
+        return true;
+    }
+
+    public void Clear()
+    {
+        _entries.Clear();
+        _recency.Clear();
+    }
 }
