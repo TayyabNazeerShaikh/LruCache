@@ -1,0 +1,43 @@
+# compose.yml — Local development stack (builds the image from source).
+#
+# Usage:
+#   docker compose up --build        # build image, start containers
+#   docker compose up --build -d     # same, detached (background)
+#   docker compose down              # stop and remove containers
+#   docker compose logs -f api       # tail logs
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lrucache-api
+    ports:
+      # host:container — access the API at http://localhost:8080
+      - "8080:8080"
+    environment:
+      # Inside Docker, TLS is terminated at the reverse-proxy layer.
+      # Production disables the HTTPS redirect guard in Program.cs.
+      - ASPNETCORE_ENVIRONMENT=Production
+      # ASP.NET Core reads LruCache:Capacity from this env var.
+      # Double-underscore (__) is the hierarchy separator.
+      # ${LRUCACHE_CAPACITY:-100} means: use LRUCACHE_CAPACITY from .env,
+      # or fall back to 100 if the variable is not set.
+      - LruCache__Capacity=${LRUCACHE_CAPACITY:-100}
+    networks:
+      - lrucache-net
+    healthcheck:
+      # Docker polls this command on the interval below.
+      # Returns 0 (healthy) when /health responds with HTTP 200.
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s   # grace period before failures count
+    restart: unless-stopped
+
+networks:
+  # Isolated bridge network. Containers communicate by service name.
+  # Prevents this stack from colliding with containers on the default bridge.
+  lrucache-net:
+    driver: bridge

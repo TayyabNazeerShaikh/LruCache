@@ -37,3 +37,11 @@ coverage*/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment / secrets — never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Deployment state — local only, not shared
+.deployed-tag

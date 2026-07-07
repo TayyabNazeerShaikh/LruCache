@@ -1,7 +1,405 @@
 # LRU Cache — Complete Reference Guide
 
 > A production-grade, thread-safe Least Recently Used cache built from scratch in C# (.NET 10),
-> exposed as a REST API, and structured with Clean Architecture.
+> exposed as a REST API, structured with Clean Architecture, and shipped with a full
+> Docker + GitHub Actions CI/CD pipeline.
+
+---
+
+## CI/CD Pipeline
+
+- **CI status:** [![CI](https://github.com/TayyabNazeerShaikh/LruCache/actions/workflows/ci.yml/badge.svg)](https://github.com/TayyabNazeerShaikh/LruCache/actions/workflows/ci.yml)
+- **CD status:** [![CD](https://github.com/TayyabNazeerShaikh/LruCache/actions/workflows/cd.yml/badge.svg)](https://github.com/TayyabNazeerShaikh/LruCache/actions/workflows/cd.yml)
+- **GHCR image:** `ghcr.io/tayyabnazeersha ikh/lrucache`
+
+---
+
+## DevOps and CI/CD
+
+### Pipeline architecture
+
+```
+Developer
+    │
+    ▼  git push / pull request
+GitHub Repository (github.com/TayyabNazeerShaikh/LruCache)
+    │
+    ▼  on: push to main  OR  pull_request → main
+┌───────────────────────────────────────────────────────┐
+│  CI  (.github/workflows/ci.yml)                       │
+│  ├── Restore NuGet packages (cached)                  │
+│  ├── Build solution in Release                        │
+│  ├── Run 16 unit tests                                │
+│  ├── Run 7 integration tests                          │
+│  └── Validate Docker build (no push)                  │
+└───────────────────────────────────────────────────────┘
+    │
+    ▼  only when CI succeeds on main
+┌───────────────────────────────────────────────────────┐
+│  CD  (.github/workflows/cd.yml)                       │
+│  ├── Build Docker image (with GHA layer cache)        │
+│  ├── Tag: sha-<7-char-git-sha>  (immutable)           │
+│  ├── Tag: latest                (mutable)             │
+│  ├── Embed OCI labels           (source, commit, date)│
+│  └── Push to GHCR                                     │
+└───────────────────────────────────────────────────────┘
+    │
+    ▼  image available at ghcr.io/tayyabnazeersha ikh/lrucache
+GitHub Container Registry (GHCR)
+    │
+    ▼  manual: ./scripts/deploy-local.sh sha-<commit>
+┌───────────────────────────────────────────────────────┐
+│  Local Deployment (scripts/deploy-local.sh/.ps1)      │
+│  ├── Pull immutable image from GHCR                   │
+│  ├── docker compose -f compose.deploy.yml up -d       │
+│  ├── Poll GET /health until HTTP 200 (60 s max)       │
+│  └── Auto-rollback to .deployed-tag on failure        │
+└───────────────────────────────────────────────────────┘
+    │
+    ▼
+Running LruCache API  (http://localhost:8080)
+```
+
+---
+
+### Prerequisites
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| .NET SDK | 10.0.x | Build and test |
+| Docker Desktop | 29+ | Container build and run |
+| Git | any | Version control |
+| curl | any | Health check probing |
+
+**Check versions:**
+```bash
+dotnet --version        # should show 10.0.x
+docker --version        # should show 29+
+docker compose version  # should show v2.x
+```
+
+---
+
+### Local development commands
+
+```bash
+# Restore packages
+dotnet restore LruCache.slnx
+
+# Build (Release)
+dotnet build LruCache.slnx --configuration Release
+
+# Run all tests
+dotnet test LruCache.slnx --configuration Release
+
+# Run only unit tests
+dotnet test tests/LruCache.UnitTests --configuration Release
+
+# Run only integration tests
+dotnet test tests/LruCache.IntegrationTests --configuration Release
+
+# Run the API locally (http://localhost:5073)
+dotnet run --project src/LruCache.Api
+```
+
+---
+
+### Docker commands (Phase 1)
+
+```bash
+# Build the image
+docker build --tag lrucache-api:local .
+
+# Run the container (detached, port 8080)
+docker run -d --name lrucache-api -p 8080:8080 lrucache-api:local
+
+# Inspect running containers
+docker ps
+
+# View container logs (follow)
+docker logs -f lrucache-api
+
+# Stop the container
+docker stop lrucache-api
+
+# Remove the container
+docker rm lrucache-api
+
+# Remove the image
+docker rmi lrucache-api:local
+
+# Test the health endpoint
+curl http://localhost:8080/health
+```
+
+---
+
+### Docker Compose commands (Phase 2)
+
+`compose.yml` builds from source — use this for local development.
+
+```bash
+# Build image and start (foreground, shows logs)
+docker compose up --build
+
+# Build image and start (background / detached)
+docker compose up --build -d
+
+# View running services and their health status
+docker compose ps
+
+# View logs (follow)
+docker compose logs -f api
+
+# Stop containers (preserves volumes)
+docker compose down
+
+# Stop containers and remove all volumes
+docker compose down --volumes
+
+# Rebuild without cache (nuclear option for dependency issues)
+docker compose build --no-cache
+```
+
+**First-time setup:**
+```bash
+cp .env.example .env
+# Edit .env if you want a non-default capacity
+docker compose up --build -d
+curl http://localhost:8080/health    # → {"status":"Healthy"}
+curl http://localhost:8080/api/cache/stats
+```
+
+---
+
+### CI workflow explanation (Phase 3)
+
+File: `.github/workflows/ci.yml`
+
+**Triggers:** every push to `main` and every pull request targeting `main`.
+
+**What it does and why:**
+
+| Step | Command | Why |
+|------|---------|-----|
+| Checkout | `actions/checkout@v4` | Get the code |
+| Setup .NET | `actions/setup-dotnet@v4` `10.0.x` | Exact SDK version match |
+| Cache NuGet | key = `OS + hash(*.csproj)` | Skip 30 s download on repeat runs |
+| Restore | `dotnet restore LruCache.slnx` | Download declared packages |
+| Build | `dotnet build --configuration Release --no-restore` | Compile; fail fast on errors |
+| Unit tests | `dotnet test tests/LruCache.UnitTests --no-build` | Pure data-structure correctness |
+| Integration tests | `dotnet test tests/LruCache.IntegrationTests --no-build` | Full HTTP round-trips via WebApplicationFactory |
+| Docker validate | `docker build --tag lrucache-api:ci-validate .` | Dockerfile builds; no push |
+
+**Integration tests run in CI without any extra setup** because `WebApplicationFactory<Program>` boots the application in memory — no server ports, no external services, no flakiness.
+
+---
+
+### CD / container publishing workflow explanation (Phase 4)
+
+File: `.github/workflows/cd.yml`
+
+**Trigger:** `workflow_run` fires when the CI workflow **completes successfully** on `main`. PRs never trigger CD. A failed CI never triggers CD.
+
+**What it does:**
+
+| Step | Detail |
+|------|--------|
+| Checkout at tested SHA | Uses `github.event.workflow_run.head_sha` — the exact commit CI verified |
+| Extract short SHA | `abc1234` → used in tag `sha-abc1234` |
+| Login to GHCR | Uses `secrets.GITHUB_TOKEN` (auto-provided, no setup required) |
+| Setup Buildx | Enables GHA layer cache and multi-platform support |
+| Metadata | Generates tags + OCI labels (source, revision, created) |
+| Build + push | `docker/build-push-action@v6` with `cache-from/cache-to: type=gha` |
+
+**CI vs CD vs Deployment:**
+- **CI** answers: *"Is the code correct?"* — runs on every change
+- **CD** answers: *"Is the artifact ready?"* — runs after CI passes on main
+- **Deployment** answers: *"Is the new version running in production?"* — triggered manually
+
+---
+
+### GHCR image naming convention
+
+```
+ghcr.io / tayyabnazeersha ikh / lrucache : sha-abc1234
+   │              │                 │          │
+   │              │                 │          └─ tag
+   │              │                 └─ repository name (lowercase)
+   │              └─ GitHub username (lowercase)
+   └─ registry host
+```
+
+**Rules:**
+- Image names are always lowercase (GHCR requirement)
+- The repository name matches the GitHub repo name, lowercased
+- Tags are controlled entirely by the CD workflow
+
+---
+
+### Image tagging strategy
+
+| Tag | Example | Mutable? | Use case |
+|-----|---------|----------|----------|
+| `sha-<7-char>` | `sha-abc1234` | No | **Use this for deployments** — immutable, traceable to a specific commit |
+| `latest` | `latest` | Yes | Documentation, quick testing — never for production deployments |
+
+**Why immutable tags matter:**
+If you deploy `latest` and something breaks, you cannot roll back — `latest` now points to the broken image. With `sha-abc1234`, you always know exactly what code is running and can deploy any previous SHA to roll back.
+
+---
+
+### Local deployment instructions (Phase 5)
+
+#### Prerequisites
+```bash
+# Log in to GHCR (only needed once)
+echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u TayyabNazeerShaikh --password-stdin
+```
+
+Your GitHub PAT needs the `read:packages` scope. Create one at:
+`GitHub → Settings → Developer settings → Personal access tokens`
+
+#### Deploy a specific SHA (recommended)
+```bash
+# Linux / macOS / Git Bash
+./scripts/deploy-local.sh sha-abc1234
+
+# Windows PowerShell
+.\scripts\deploy-local.ps1 -Tag sha-abc1234
+```
+
+#### What the script does
+1. Records the currently running tag in `.deployed-tag`
+2. Pulls the new image from GHCR
+3. `docker compose -f compose.deploy.yml up -d` (replaces the running container)
+4. Polls `GET /health` every 5 seconds for up to 60 seconds
+5. On success: updates `.deployed-tag` with the new tag
+6. On failure: re-pulls the previous tag and re-deploys it automatically
+
+---
+
+### Health-check verification
+
+The `/health` endpoint is provided by `Microsoft.AspNetCore.Diagnostics.HealthChecks`.
+It returns `200 OK` with body `{"status":"Healthy"}` when the application is ready to serve requests.
+
+```bash
+# Quick check
+curl http://localhost:8080/health
+
+# Verbose — shows headers and status code
+curl -v http://localhost:8080/health
+
+# Expected response
+# HTTP/1.1 200 OK
+# {"status":"Healthy"}
+```
+
+**Where health checks are used:**
+- `Dockerfile` `HEALTHCHECK` instruction — Docker marks container healthy/unhealthy
+- `compose.yml` / `compose.deploy.yml` `healthcheck:` — Compose health status
+- `scripts/deploy-local.sh` — deployment success gate and rollback trigger
+
+---
+
+### Rollback procedure (Phase 7)
+
+#### Automatic rollback (built into deploy script)
+
+The deploy script rolls back automatically when the health check fails:
+
+```
+Version A (sha-aaa1111) deployed → healthy → .deployed-tag = "sha-aaa1111"
+
+Deploy Version B (sha-bbb2222):
+  Pull sha-bbb2222 ✓
+  docker compose up -d ✓
+  Health check → FAIL (12 × 5s = 60s)
+  Pull sha-aaa1111 ✓
+  docker compose up -d ✓
+  .deployed-tag unchanged = "sha-aaa1111"
+  Exit code 1 (deployment failed)
+```
+
+#### Manual rollback
+
+```bash
+# Linux / Git Bash — roll back to a known-good SHA
+./scripts/deploy-local.sh sha-aaa1111
+
+# PowerShell
+.\scripts\deploy-local.ps1 -Tag sha-aaa1111
+```
+
+#### Find a previous SHA
+
+```bash
+# List recent commits with their SHAs
+git log --oneline -10
+
+# Or check the GHCR packages page on GitHub for all available tags
+# https://github.com/TayyabNazeerShaikh/LruCache/pkgs/container/lrucache
+```
+
+---
+
+### Troubleshooting common failures
+
+#### `docker: Cannot connect to the Docker daemon`
+Docker Desktop is not running. Open Docker Desktop from the Start Menu and wait for the daemon to start.
+
+#### `git@github.com: Permission denied (publickey)`
+You're using SSH auth without an SSH key. Switch to HTTPS:
+```bash
+git remote set-url origin https://github.com/TayyabNazeerShaikh/LruCache.git
+git push -u origin main
+# Enter username + GitHub PAT when prompted
+```
+
+#### `unauthorized: authentication required` (docker pull from GHCR)
+Log in to GHCR first:
+```bash
+echo "YOUR_PAT" | docker login ghcr.io -u TayyabNazeerShaikh --password-stdin
+```
+
+#### CI fails: `dotnet restore` can't find `.slnx`
+Ensure you're running commands from the repo root (where `LruCache.slnx` lives).
+
+#### Health check fails after `docker compose up`
+1. Check container logs: `docker compose logs api`
+2. Confirm port: `docker compose ps`
+3. Try manually: `curl -v http://localhost:8080/health`
+4. Common cause: `ASPNETCORE_ENVIRONMENT` not set to `Production` → HTTPS redirect active inside container
+
+#### CD workflow doesn't trigger
+Verify CI workflow name matches exactly. In `cd.yml`:
+```yaml
+workflows: ["CI"]   # must match the `name:` field in ci.yml exactly
+```
+
+#### Image not visible on GHCR after CD runs
+Check that the repository visibility allows package visibility. Go to:
+`GitHub → Your profile → Packages → lrucache → Package settings → Change visibility`
+
+---
+
+### Files created by this CI/CD setup
+
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Multi-stage build: SDK for compile, aspnet runtime for run |
+| `.dockerignore` | Excludes `bin/`, `obj/`, tests, scripts from the build context |
+| `compose.yml` | Local dev: builds image from source, starts API on port 8080 |
+| `compose.deploy.yml` | Production: pulls pre-built image from GHCR via `IMAGE_TAG` env var |
+| `.env.example` | Documents required environment variables without containing secrets |
+| `.github/workflows/ci.yml` | CI: restore → build → test → docker validate, on push+PR to main |
+| `.github/workflows/cd.yml` | CD: build + push to GHCR, only after CI passes on main |
+| `scripts/deploy-local.sh` | Bash deploy script: pull → start → health check → rollback |
+| `scripts/deploy-local.ps1` | PowerShell equivalent for Windows |
+| `src/LruCache.Api/Program.cs` | Modified: added `/health` endpoint, guarded HTTPS redirect |
+
+---
 >
 > **If you're reading this after a long break:** start at [What is an LRU Cache](#what-is-an-lru-cache),
 > then jump to [Project Structure](#project-structure) to orient yourself, then read

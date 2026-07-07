@@ -1,0 +1,110 @@
+# ci.yml — Continuous Integration
+#
+# Runs on every push to main and every pull request targeting main.
+# Purpose: verify that the code compiles, all tests pass, and the
+# Dockerfile builds without errors.
+#
+# This is the GATE. The CD workflow (cd.yml) only fires after this succeeds.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least-privilege permissions: this workflow only reads code.
+# Never grant write permissions unless a step explicitly requires it.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Restore → Build → Test → Docker validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      # Fetches the repository content onto the runner.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. .NET SDK ──────────────────────────────────────────────────────────
+      # Installs the exact SDK version used by the project.
+      # '10.0.x' means "latest patch of .NET 10" — picks up security fixes
+      # automatically without breaking changes.
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # ── 3. NuGet cache ───────────────────────────────────────────────────────
+      # NuGet packages live at ~/.nuget/packages on Linux runners.
+      # Cache key: OS + hash of all .csproj files.
+      # If any .csproj changes (new/updated package), the key changes and the
+      # cache is rebuilt. Otherwise packages are served from cache (~2 s vs ~30 s).
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # ── 4. Restore ───────────────────────────────────────────────────────────
+      # Downloads NuGet packages declared in all projects in the solution.
+      # The .slnx solution format is supported by the .NET 10 CLI.
+      # Fails fast: if a package cannot be resolved, the pipeline stops here.
+      - name: Restore dependencies
+        run: dotnet restore LruCache.slnx
+
+      # ── 5. Build ─────────────────────────────────────────────────────────────
+      # Compiles all projects in Release configuration.
+      # --no-restore: packages already restored in the previous step.
+      # Fails fast: compilation errors stop the pipeline immediately.
+      - name: Build solution (Release)
+        run: dotnet build LruCache.slnx --configuration Release --no-restore
+
+      # ── 6. Unit tests ────────────────────────────────────────────────────────
+      # Runs the pure data-structure tests.
+      # --no-build: uses the binaries built in the previous step.
+      # --logger trx: produces a machine-readable test result file.
+      - name: Run unit tests
+        run: >-
+          dotnet test tests/LruCache.UnitTests/LruCache.UnitTests.csproj
+          --configuration Release
+          --no-build
+          --verbosity normal
+          --logger "trx;LogFileName=unit-tests.trx"
+
+      # ── 7. Integration tests ─────────────────────────────────────────────────
+      # Boots the real ASP.NET Core app in memory via WebApplicationFactory —
+      # no external services required. Runs only if unit tests passed.
+      - name: Run integration tests
+        run: >-
+          dotnet test tests/LruCache.IntegrationTests/LruCache.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --verbosity normal
+          --logger "trx;LogFileName=integration-tests.trx"
+
+      # ── 8. Upload test results (always, even on failure) ─────────────────────
+      # Test result files are uploaded as workflow artefacts so you can inspect
+      # failures in the GitHub Actions UI without re-running locally.
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/*.trx"
+          retention-days: 7
+
+      # ── 9. Validate Dockerfile ───────────────────────────────────────────────
+      # Builds the Docker image WITHOUT pushing it.
+      # Purpose: catch Dockerfile errors and mismatched publish paths in CI.
+      # Uses Docker's BuildKit (default since Docker 23) which supports
+      # --mount=type=cache for faster layer operations.
+      - name: Validate Docker image builds
+        run: docker build --tag lrucache-api:ci-validate .

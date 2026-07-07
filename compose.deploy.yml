@@ -1,0 +1,38 @@
+# compose.deploy.yml — Production deployment using a pre-built GHCR image.
+#
+# This file is used by the deploy scripts, NOT by local development.
+# For local development, use compose.yml (which builds from source).
+#
+# Usage (via deploy script — preferred):
+#   ./scripts/deploy-local.sh sha-abc1234
+#
+# Usage (manual):
+#   IMAGE_TAG=ghcr.io/tayyabnazeersha ikh/lrucache:sha-abc1234 \
+#     docker compose -f compose.deploy.yml up -d
+#
+# The IMAGE_TAG environment variable is set by the deploy script.
+# It must be the full image reference: registry/repo:tag
+
+services:
+  api:
+    image: ${IMAGE_TAG:?IMAGE_TAG must be set to a full image reference, e.g. ghcr.io/user/lrucache:sha-abc1234}
+    container_name: lrucache-api
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - LruCache__Capacity=${LRUCACHE_CAPACITY:-100}
+    networks:
+      - lrucache-net
+    healthcheck:
+      # Tighter intervals than compose.yml for faster deployment feedback.
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  lrucache-net:
+    driver: bridge

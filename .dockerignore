@@ -1,0 +1,34 @@
+# .dockerignore — Controls what Docker sends to the build daemon as build context.
+# Excluding unnecessary files speeds up builds and prevents secrets from leaking into images.
+
+# Build output — these are regenerated inside the container
+**/bin/
+**/obj/
+
+# Version control — never needed in an image
+.git/
+.gitignore
+
+# IDE and OS artefacts
+.vs/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# Test projects — not needed to build or run the API
+tests/
+
+# Docker and deployment files — not part of the application
+Dockerfile
+compose*.yml
+.env
+.env.*
+scripts/
+
+# CI/CD configuration
+.github/
+
+# Documentation
+README.md
+*.md

@@ -1,0 +1,109 @@
+# cd.yml — Container Image Publishing (Continuous Delivery)
+#
+# Triggered ONLY after the CI workflow completes successfully on main.
+# Builds the Docker image, tags it with the commit SHA and 'latest',
+# and pushes it to GitHub Container Registry (GHCR).
+#
+# This workflow produces the ARTIFACT (the image). It does NOT deploy.
+# Deployment is a separate, manually-triggered operation using the
+# deploy scripts in scripts/.
+#
+# GHCR image: ghcr.io/tayyabnazeersha ikh/lrucache
+# Tags produced:
+#   sha-<7-char-git-sha>   immutable — used for deployment and rollback
+#   latest                 mutable  — always points to the newest main build
+
+name: CD
+
+on:
+  # Fire only when the CI workflow completes — and only for main branch pushes.
+  # This prevents publishing images from PRs or from a failing CI run.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+# packages: write  — required to push images to GHCR.
+# contents: read   — required to checkout the repository.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and push Docker image to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Only run if CI passed. The workflow_run event fires for both
+    # success and failure — this condition gates on success only.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      # workflow_run fires at a different SHA than github.sha, so we must
+      # explicitly check out the commit that was tested by CI.
+      - name: Checkout (at the tested commit)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # ── 2. Short SHA ─────────────────────────────────────────────────────────
+      # Extract the 7-character abbreviated SHA for the image tag.
+      # Example: abc1234 → image tag: sha-abc1234
+      - name: Extract short commit SHA
+        id: sha
+        run: |
+          SHORT=$(echo "${{ github.event.workflow_run.head_sha }}" | cut -c1-7)
+          echo "short=${SHORT}" >> "$GITHUB_OUTPUT"
+
+      # ── 3. Login to GHCR ─────────────────────────────────────────────────────
+      # GITHUB_TOKEN is automatically provided by GitHub Actions — no manual
+      # secret creation needed. It has the permissions declared above.
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 4. Docker Buildx ─────────────────────────────────────────────────────
+      # Buildx is Docker's extended build client. It enables:
+      #   - Multi-platform builds (arm64 + amd64)
+      #   - GitHub Actions layer cache (type=gha)
+      #   - BuildKit features (parallel stages, secret mounts)
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 5. Generate OCI metadata ─────────────────────────────────────────────
+      # metadata-action generates:
+      #   - Image tags: sha-<short-sha> and latest
+      #   - OCI labels embedded in the image (source repo, commit, build date)
+      # Image names are automatically lowercased (GHCR requirement).
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=sha-${{ steps.sha.outputs.short }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=LruCache API
+            org.opencontainers.image.description=Thread-safe LRU Cache REST API (.NET 10)
+            org.opencontainers.image.vendor=TayyabNazeerShaikh
+
+      # ── 6. Build and push ─────────────────────────────────────────────────────
+      # cache-from/cache-to: GitHub Actions layer cache.
+      # On cache hit, Docker reuses layers from the previous run —
+      # only changed layers are rebuilt (~30 s vs ~2 min cold build).
+      # mode=max caches all intermediate layers, not just the final stage.
+      - name: Build and push image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
