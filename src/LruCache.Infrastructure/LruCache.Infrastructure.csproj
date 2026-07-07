@@ -6,13 +6,13 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <!-- Expose internal types to the unit test project -->
   <ItemGroup>
     <InternalsVisibleTo Include="LruCache.UnitTests" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Implement ILruCache from Application; use IOptions<T> from Extensions -->
+    <!-- IOptions<T> support for constructor injection of LruCacheOptions -->
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
     <ProjectReference Include="..\LruCache.Application\LruCache.Application.csproj" />
   </ItemGroup>
 

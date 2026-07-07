@@ -1,4 +1,5 @@
 using LruCache.Application.Abstractions.Caching;
+using Microsoft.Extensions.Options;
 
 namespace LruCache.Infrastructure.Caching;
 
@@ -21,6 +22,9 @@ internal sealed class LruCache<TKey, TValue> : ILruCache<TKey, TValue>
 
     public int Count { get { lock (_syncRoot) return _entries.Count; } }
     public int Capacity => _capacity;
+
+    // Used by ASP.NET Core DI — reads Capacity from appsettings.json via IOptions.
+    public LruCache(IOptions<LruCacheOptions> options) : this(options.Value.Capacity) { }
 
     internal LruCache(int capacity)
     {
