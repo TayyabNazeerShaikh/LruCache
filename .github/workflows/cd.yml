@@ -21,7 +21,7 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches: [main]
+    branches: [master]
 
 # packages: write  — required to push images to GHCR.
 # contents: read   — required to checkout the repository.

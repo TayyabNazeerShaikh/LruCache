@@ -10,9 +10,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 # Least-privilege permissions: this workflow only reads code.
 # Never grant write permissions unless a step explicitly requires it.
